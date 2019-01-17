@@ -1,0 +1,1 @@
+https://support.logmeininc.com/lastpass/help/export-your-passwords-and-secure-notes-lp040004
