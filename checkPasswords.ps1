@@ -1,34 +1,38 @@
 [cmdletBinding()]
 param (
-    $LastPassCsvExportPath = "./passwords.csv"
+    $Path = "./passwords.csv"
 )
-function Get-StringHash([String] $String,$HashName = "SHA1"){ 
-    $StringBuilder = New-Object System.Text.StringBuilder 
-    [System.Security.Cryptography.HashAlgorithm]::Create($HashName).ComputeHash([System.Text.Encoding]::UTF8.GetBytes($String)) | ForEach-Object {
-        [Void]$StringBuilder.Append($_.ToString("x2")) 
-    } 
-    $StringBuilder.ToString() 
+
+$ErrorActionPreference = "Stop"
+
+function Get-StringHash {
+    param (
+        [String]$String,
+        $HashName = "SHA1"
+    )
+    $StringBuilder = New-Object -TypeName "System.Text.StringBuilder"
+    [System.Security.Cryptography.CryptoConfig]::CreateFromName($Hashname).ComputeHash([System.Text.Encoding]::UTF8.GetBytes($String)) | ForEach-Object {
+        [Void]$StringBuilder.Append($_.ToString("x2"))
+    }
+    $StringBuilder.ToString().trim()
 }
 
 # Enable TLS 1.2
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # Import the CSV data
-$data = Import-CSV -Path $LastPassCsvExportPath
+$data = Import-CSV -Path $Path
 
-$problems = @()
 $i = 0
-forEach ($datum in $data){
+forEach ($datum in ($data | Sort-Object -Property "Name")){
     $i++
     Write-Host "Checking $($datum.name) ($($i) of $($data.count))" -ForegroundColor "Green"
     if ($datum.password){
-        $hash = Get-StringHash $datum.password
-        $params = @{
-            Uri = "https://api.pwnedpasswords.com/range/$($hash.substring(0,5))"
-            Method = "GET"
-            UseBasicParsing = $true
-        }
-        $response = Invoke-RestMethod $params
+        $needsChanged = $false
+        $hash = Get-StringHash -String $datum.password
+        $substring = $hash.substring(0,5)
+        $uri = "https://api.pwnedpasswords.com/range/$substring"
+        $response = Invoke-RestMethod -Uri $uri -Method "GET" -UseBasicParsing
         # Split the response into lines
         $results = $response.Split("`n")
         Write-Host "Found hash $($results.count) times"
@@ -38,10 +42,11 @@ forEach ($datum in $data){
             #Write-Host "Comparing $($hash) to $($foundHash)"
             if ($hash -eq $foundHash){
                 Write-Host "Password $($datum.password) has been found $($found) times!" -ForegroundColor "Red"
-                $problems += "Change password on $($datum.name) from $($datum.password)"
+                $needsChanged = $true
                 break
             }
             else {
+                
                 # Password was not found
             }
         }
@@ -49,7 +54,8 @@ forEach ($datum in $data){
         Start-Sleep -Milliseconds 1500
     }
     else {
-        Write-Host "No password defined on this object"
+        $needsChanged = $null
     }
+    $datum | Add-Member -Type "Noteproperty" -Name "NeedsChanged" -Value $needsChanged
 }
-$problems
+$data | Where-Object {$_.password -and $_.NeedsChanged} | Select-Object -Property "Name","grouping","NeedsChanged"
